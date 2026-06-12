@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🏛️ AI ผู้ช่วยงานสารบรรณอัจฉริยะ (Offline Version)</title>
+  
+  <script src="tailwindcss.js"></script>
+  <script src="sweetalert2.all.min.js"></script>
+  <script src="tesseract.min.js"></script>
+  
+  <style>
+    @font-face {
+      font-family: 'Sarabun';
+      src: local('Sarabun'), local('TH Sarabun New'), local('TH Sarabun PSK'), sans-serif;
+    }
+    body { 
+      font-family: 'Sarabun', sans-serif; 
+      background-color: #f0fdf4; /* โทนเขียวอ่อน รพ.สต. สบายตา */
+    }
+    /* ตั้งค่ากระดาษ A4 สำหรับ Preview ซูมย่อเพื่อให้เหมาะกับหน้าจอ */
+    .a4-paper {
+      background: white;
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 25mm 20mm 20mm 30mm; /* ซ้าย 3 ซม. ขวา 2 ซม. บน/ล่างตามระเบียบ */
+      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+      position: relative;
+      font-size: 16pt;
+      line-height: 1.6;
+      color: black;
+    }
+    .preview-container {
+      max-height: 88vh;
+      overflow-y: auto;
+      transform: scale(0.75);
+      transform-origin: top center;
+    }
+    @media (min-width: 1536px) {
+      .preview-container { transform: scale(0.85); }
+    }
+    .form-section { 
+      background: white; 
+      padding: 1.25rem; 
+      border-radius: 0.75rem; 
+      border: 1px solid #e2e8f0; 
+      box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+    }
+    
+    /* ซ่อนส่วนควบคุมทั้งหมดเวลาสั่งพิมพ์ด้วยเบราว์เซอร์ */
+    @media print {
+    body * { visibility: hidden; }
+    #paper, #paper * { visibility: visible; }
+    #paper {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 210mm;
+      padding: 25mm 20mm 20mm 30mm; /* ตามระเบียบสารบรรณไทย */
+    }
+  }
+	</style>
+	<script>
+// แก้ไขฟังก์ชัน Export Word ให้ฝังรูปครุฑได้ (ต้องมีไฟล์ garuda.png ในโฟลเดอร์)
+async function exportWord() {
+  const paperContent = document.getElementById('paper').innerHTML;
+  
+  // แปลง HTML เป็นไฟล์ .doc (แบบง่าย)
+  const header = `
+    <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+    <head><meta charset='utf-8'>
+    <style>
+      @page { size: 210mm 297mm; margin: 25mm 20mm 20mm 30mm; }
+      body { font-family: 'TH Sarabun New', sans-serif; font-size: 16pt; }
+      p { margin-bottom: 8pt; text-align: justify; }
+    </style></head>
+    <body>${paperContent}</body></html>`;
+
+  const blob = new Blob(['\ufeff', header], { type: 'application/msword' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "หนังสือราชการ.doc";
+  link.click();
+}
+</script>
+</head>
+<body class="p-4 md:p-6">
+
+  <div class="max-w-screen-2xl mx-auto flex flex-col lg:flex-row gap-6 no-print">
+    
+    <div class="w-full lg:w-5/12 space-y-4">
+      
+      <header class="bg-gradient-to-r from-emerald-600 to-green-700 p-4 rounded-xl text-white shadow-md">
+        <h1 class="text-2xl font-bold flex items-center gap-2">🏛️ AI ผู้ช่วยงานสารบรรณ</h1>
+        <p class="text-green-100 text-xs mt-1">สแกนต้นฉบับ -> ปรับระเบียบภาษาราชการ -> ส่งออก Word/พิมพ์ (รพ.สต. สังกัด อบจ.สมุทรสาคร)</p>
+      </header>
+
+      <div class="form-section border-t-4 border-t-blue-600">
+        <h2 class="text-base font-bold text-blue-700 mb-2 flex items-center gap-2">🔍 1. สแกนต้นฉบับจากรูปภาพ (OCR)</h2>
+        <div class="mb-2">
+          <label class="block text-xs font-semibold text-gray-500 mb-1">LM Studio Server URL</label>
+          <input type="text" id="lmUrl" value="http://172.28.52.72:1234/v1/chat/completions" class="w-full border p-1.5 rounded text-sm bg-gray-50 outline-none focus:border-blue-500">
+        </div>
+        <div class="mb-3">
+          <label class="block text-xs font-semibold text-gray-600 mb-1">อัปโหลดภาพถ่าย/สแกนบันทึกข้อความร่าง</label>
+          <input type="file" id="scanImage" accept="image/*" class="w-full text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-blue-50 file:text-blue-700 cursor-pointer">
+        </div>
+        <button onclick="extractTextFromImage()" class="w-full bg-slate-700 text-white py-2 rounded font-bold text-sm shadow hover:bg-slate-800 transition">
+          🖨️ เริ่มสแกนและแปลงไฟล์ภาพเป็นตัวอักษร
+        </button>
+        <textarea id="rawText" rows="4" class="w-full mt-2 border border-slate-300 p-2 rounded text-sm outline-none focus:ring-2 focus:ring-blue-400" placeholder="ข้อความที่สแกนได้จะปรากฏตรงนี้... (คุณสามารถพิมพ์ข้อความสดหรือแก้ไขเพิ่มเติมได้เอง)"></textarea>
+      </div>
+
+      <div class="form-section border-t-4 border-t-purple-600 space-y-3">
+        <h2 class="text-base font-bold text-purple-700 flex items-center gap-2">✨ 2. เลือกรูปแบบและจุดประสงค์เอกสาร</h2>
+        
+        <div>
+          <label class="block text-xs font-bold text-gray-700 mb-1">ประเภทหนังสือราชการไทย:</label>
+          <div class="grid grid-cols-3 gap-2">
+            <label class="flex items-center gap-1.5 p-2 border rounded cursor-pointer hover:bg-slate-50 text-xs">
+              <input type="radio" name="docType" value="memo" checked class="w-4 h-4 text-purple-600">
+              <span class="font-semibold">บันทึกข้อความ (ภายใน)</span>
+            </label>
+            <label class="flex items-center gap-1.5 p-2 border rounded cursor-pointer hover:bg-slate-50 text-xs">
+              <input type="radio" name="docType" value="official" class="w-4 h-4 text-purple-600">
+              <span class="font-semibold">หนังสือครุฑ (ภายนอก)</span>
+            </label>
+            <label class="flex items-center gap-1.5 p-2 border rounded cursor-pointer hover:bg-slate-50 text-xs">
+              <input type="radio" name="docType" value="order" class="w-4 h-4 text-purple-600">
+              <span class="font-semibold">หนังสือคำสั่งแต่งตั้ง</span>
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-gray-700 mb-1">เรื่อง/วัตถุประสงค์ในการส่งออก:</label>
+          <select id="docPurpose" class="w-full border p-2 rounded text-xs bg-white outline-none focus:border-purple-500 font-medium">
+            <option value="หนังสือเวียนแจ้งเพื่อทราบ">📢 หนังสือเวียนแจ้งเพื่อโปรดทราบ</option>
+            <option value="หนังสือสั่งการให้ปฏิบัติตามคำสั่ง">⚠️ หนังสือสั่งการ / ให้ปฏิบัติตามคำสั่งอย่างเคร่งครัด</option>
+            <option value="หนังสือส่งรายชื่อเข้าอบรมหรือสัมมนา">🎓 หนังสือส่งรายชื่อข้าราชการ/เจ้าหน้าที่เข้าร่วมการอบรมต่างๆ</option>
+            <option value="ปรับแต่งภาษาราชการทั่วไปตามต้นฉบับ">📝 เรื่องอื่นๆ (ยึดตามโครงสร้างของต้นฉบับเดิม)</option>
+          </select>
+        </div>
+
+        <button onclick="generateDocWithAI()" class="w-full bg-purple-600 text-white py-2.5 rounded-lg font-bold shadow-md hover:bg-purple-700 transition flex justify-center items-center gap-2 text-base">
+          ✨ เรียก AI เกลาและเรียบเรียงภาษาราชการ
+        </button>
+      </div>
+
+      <div class="form-section border-t-4 border-t-emerald-600">
+        <h2 class="text-base font-bold text-emerald-700 mb-2">✏️ 3. ตรวจสอบและแก้ไขเนื้อหาข้อมูล</h2>
+        <div class="grid grid-cols-2 gap-2 mb-2">
+          <div><label class="text-[11px] font-bold text-slate-500">ส่วนราชการ/หน่วยงาน</label><input type="text" id="f_dept" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+          <div><label class="text-[11px] font-bold text-slate-500">ที่ (เลขที่หนังสือ)</label><input type="text" id="f_no" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+          <div><label class="text-[11px] font-bold text-slate-500">วันที่</label><input type="text" id="f_date" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+          <div><label class="text-[11px] font-bold text-slate-500">เรื่อง</label><input type="text" id="f_subject" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+          <div class="col-span-2"><label class="text-[11px] font-bold text-slate-500">เรียน (ผู้รับปฏิบัติ/ปลายทาง)</label><input type="text" id="f_to" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+          <div class="col-span-2"><label class="text-[11px] font-bold text-slate-500">อ้างถึง (ถ้ามี)</label><input type="text" id="f_ref" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+          <div class="col-span-2"><label class="text-[11px] font-bold text-slate-500">สิ่งที่ส่งมาด้วย (ถ้ามี)</label><input type="text" id="f_attach" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+        </div>
+        
+        <label class="text-[11px] font-bold text-slate-500">เนื้อหาจดหมาย (เว้นบรรทัดเพื่อแยกย่อหน้าโดยระบบจะใส่ย่อหน้าให้โดยอัตโนมัติ)</label>
+        <textarea id="f_content" rows="6" class="w-full border p-2 text-xs rounded mb-2 outline-none focus:ring-1 focus:ring-emerald-400" oninput="updatePreview()"></textarea>
+        
+        <div class="grid grid-cols-2 gap-2">
+          <div><label class="text-[11px] font-bold text-slate-500">ชื่อผู้ลงนาม</label><input type="text" id="f_sign_name" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+          <div><label class="text-[11px] font-bold text-slate-500">ตำแหน่ง</label><input type="text" id="f_sign_pos" class="w-full border p-1 text-xs rounded" oninput="updatePreview()"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2">
+        <button onclick="saveDraft()" class="bg-amber-600 text-white py-2 rounded font-bold shadow text-xs hover:bg-amber-700 transition">💾 บันทึกแบบร่าง (Save Draft)</button>
+        <button onclick="loadDraft()" class="bg-amber-800 text-white py-2 rounded font-bold shadow text-xs hover:bg-amber-950 transition">📂 ดึงแบบร่างเดิม (Load Draft)</button>
+        <button onclick="window.print()" class="col-span-1 bg-blue-600 text-white py-2.5 rounded-lg font-bold shadow text-sm hover:bg-blue-700 transition">🖨️ สั่งพิมพ์เอกสาร / ออก PDF</button>
+        <button onclick="exportWord()" class="col-span-1 bg-blue-800 text-white py-2.5 rounded-lg font-bold shadow text-sm hover:bg-blue-900 transition">📄 ส่งออกเป็น MS Word (.doc)</button>
+      </div>
+
+    </div>
+
+    <div class="w-full lg:w-7/12 bg-slate-400 p-2 rounded-xl flex justify-center preview-container shadow-inner">
+      <div id="paper" class="a4-paper">
+        </div>
+    </div>
+
+  </div>
+
+  <script>
+    // Config สำหรับงาน Tesseract OCR (กรณีออฟไลน์เต็มรูปแบบระบุ Path ไปยัง Worker)
+    const tesseractConfig = {
+      workerPath: 'worker.min.js',
+      corePath: 'tesseract-core.wasm.js',
+      logger: m => console.log(m)
+    };
+
+    // ==========================================
+    // 1. ระบบ OCR (สแกนรูปภาพแปลงเป็นตัวอักษรดิบ)
+    // ==========================================
+    async function extractTextFromImage() {
+      const fileInput = document.getElementById('scanImage');
+      if (!fileInput.files[0]) return Swal.fire('แจ้งเตือน', 'กรุณาเลือกหรืออัปโหลดไฟล์รูปภาพก่อนทำการสแกนครับ', 'warning');
+
+      Swal.fire({
+        title: '🔍 กำลังสแกนข้อความเอกสาร...',
+        text: 'ระบบกำลังดึงตัวอักษรภาษาไทยจากรูปภาพในคอมพิวเตอร์ของคุณ (ใช้เวลาประมาณ 10-20 วินาที)',
+        allowOutsideClick: false,
+        didOpen: () => { Swal.showLoading(); }
+      });
+
+      try {
+        const result = await Tesseract.recognize(fileInput.files[0], 'tha+eng');
+        document.getElementById('rawText').value = result.data.text.trim();
+        Swal.fire({ icon: 'success', title: 'สแกนตัวอักษรสำเร็จ!', timer: 1500, showConfirmButton: false });
+      } catch (err) {
+        Swal.fire('เกิดข้อผิดพลาด', 'ไม่สามารถอ่านข้อความจากไฟล์ภาพนี้ได้: ' + err.message, 'error');
+      }
+    }
+
+    // ==========================================
+    // 2. ระบบ AI ประมวลผลและเรียบเรียงภาษาราชการ (LM Studio)
+    // ==========================================
+    async function generateDocWithAI() {
+      const rawText = document.getElementById('rawText').value.trim();
+      if (!rawText) return Swal.fire('แจ้งเตือน', 'ไม่มีข้อมูล! กรุณาสแกนข้อความจากภาพ หรือพิมพ์ข้อมูลดิบก่อนส่งให้ AI ครับ', 'warning');
+
+      const docType = document.querySelector('input[name="docType"]:checked').value;
+      const docPurpose = document.getElementById('docPurpose').value;
+      const lmUrl = document.getElementById('lmUrl').value;
+
+      Swal.fire({
+        title: '✨ AI กำลังเรียบเรียงหนังสื่อราชการ...',
+        text: 'กำลังปรับระดับภาษาและจัดกลุ่มโครงสร้างผ่านโมเดลในเครื่องของคุณ...',
+        allowOutsideClick: false,
+        didOpen: () => { Swal.showLoading(); }
+      });
+
+      // ปรับปรุง System Prompt ให้ส่งโครงสร้าง JSON กลับมาทาง Text ธรรมดา เพื่อแก้ปัญหาเรื่อง LM Studio รุ่นเก่าค้าง
+      const systemInstruction = `คุณคือผู้เชี่ยวชาญด้านงานสารบรรณระเบียบเอกสารราชการไทย 
+หน้าที่ของคุณคือรับข้อความดิบหรือผลจากการ OCR แล้วนำมาเกลาเรียบเรียงใหม่เป็น "ภาษาราชการที่สละสลวย" โดยปรับบริบทตามประเภทและจุดประสงค์ที่กำหนด
+
+ประเภทหนังสื่อราชการ: ${docType}
+จุดประสงค์เนื้อหา: ${docPurpose}
+
+ข้อกำหนดเนื้อหา (ห้ามขาดตกใจความเดิม):
+- แบ่งเนื้อความส่วนเนื้อหาเป็น 3 ส่วน (เหตุผลความจำเป็น, จุดประสงค์/รายละเอียด, ข้อสรุปสั่งการลงท้าย เช่น จึงเรียนมาเพื่อโปรดทราบ/พิจารณา)
+- หากข้อมูลไม่มีส่วนราชการ ให้ใช้ข้อมูลมาตรฐานคือ "โรงพยาบาลส่งเสริมสุขภาพตำบลบ้านขอม สังกัดองค์การบริหารส่วนจังหวัดสมุทรสาคร"
+
+คุณต้องตอบกลับข้อมูลเป็นรูปแบบ JSON Block อย่างเคร่งครัดตามโครงสร้างด้านล่างนี้เท่านั้น ห้ามมีคำทักทายหรือคำพูดอื่นนอกเหนือจาก JSON:
+
+{
+  "department": "ชื่อหน่วยงานหรือส่วนราชการ",
+  "doc_no": "เลขที่หนังสือ (ถ้าไม่มีให้ใส่ สส ๐๐๓๓.๐๑/...)",
+  "date": "วัน เดือน ปี ปัจจุบันในรูปแบบภาษาทางการ",
+  "subject": "ชื่อเรื่องหนังสือ (สรุปสั้นได้ใจความสละสลวย)",
+  "to": "เรียน (ระบุตำแหน่งหรือชื่อผู้รับ)",
+  "reference": "เอกสารอ้างถึง (ถ้าไม่มีให้ระบุเป็นสตริงว่าง \"\")",
+  "attachments": "สิ่งที่ส่งมาด้วย (ถ้าไม่มีให้ระบุเป็นสตริงว่าง \"\")",
+  "content": "เนื้อหาจดหมายที่เรียบเรียงเป็นภาษาราชการสมบูรณ์แล้ว ให้คั่นย่อหน้าแต่ละส่วนด้วยเครื่องหมาย \\n\\n",
+  "sign_name": "ชื่อผู้ลงนามจริงในวงเล็บ (ถ้าไม่มีให้เว้นช่องจุดไข่ปลาไว้ให้พิมพ์เพิ่ม)",
+  "sign_pos": "ตำแหน่งผู้ลงนาม"
+}`;
+
+      const payload = {
+        model: "local-model",
+        messages: [
+          { role: "system", content: systemInstruction },
+          { role: "user", content: `เนื้อหาดิบที่ต้องให้นำมาปรับปรุง:\n${rawText}` }
+        ],
+        temperature: 0.2
+      };
+
+      try {
+        const response = await fetch(lmUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) throw new Error("ไม่สามารถเชื่อมต่อ Server ได้ กรุณาเปิดโปรแกรม LM Studio และตรวจสอบว่าเปิด CORS แล้ว");
+
+        const data = await response.json();
+        let aiResult = data.choices[0].message.content.trim();
+        
+        // จัดการกรณีที่โมเดลแถมครอบ Markdown ด้วย ```json ... ```
+        aiResult = aiResult.replace(/```json/g, '').replace(/```/g, '').trim();
+        
+        // ค้นหาเฉพาะสัญญลักษณ์โครงสร้าง JSON ป้องกันคำอื่นหลุดมา
+        const jsonMatch = aiResult.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error("ผลลัพธ์ที่ได้จาก AI ไม่อยู่ในรูปแบบโครงสร้างข้อมูลเอกสารราชการที่นำไปประมวลผลต่อได้");
+
+        const parsedDoc = JSON.parse(jsonMatch[0]);
+
+        // นำข้อมูลที่ได้จาก AI ไปใส่ฟอร์มในกล่อง Input ต่างๆ
+        document.getElementById('f_dept').value = parsedDoc.department || 'โรงพยาบาลส่งเสริมสุขภาพตำบลบ้านขอม อบจ.สมุทรสาคร';
+        document.getElementById('f_no').value = parsedDoc.doc_no || '-';
+        document.getElementById('f_date').value = parsedDoc.date || '-';
+        document.getElementById('f_subject').value = parsedDoc.subject || '-';
+        document.getElementById('f_to').value = parsedDoc.to || '-';
+        document.getElementById('f_ref').value = parsedDoc.reference || '';
+        document.getElementById('f_attach').value = parsedDoc.attachments || '';
+        document.getElementById('f_content').value = parsedDoc.content || '';
+        document.getElementById('f_sign_name').value = parsedDoc.sign_name || '(.........................................)';
+        document.getElementById('f_sign_pos').value = parsedDoc.sign_pos || 'ผู้อำนวยการโรงพยาบาลส่งเสริมสุขภาพตำบลบ้านขอม';
+
+        updatePreview();
+        Swal.fire({ icon: 'success', title: 'AI เรียบเรียงจดหมายเรียบร้อย!', timer: 1500, showConfirmButton: false });
+
+      } catch (err) {
+        Swal.fire('เกิดข้อผิดพลาดในการประมวลผล', err.message + '\n\nคำแนะนำ: ตรวจสอบโมเดลว่าเปิดทำงานอยู่และพิมพ์ข้อความดิบให้ชัดเจน', 'error');
+        console.error(err);
+      }
+    }
+
+    // ==========================================
+    // 3. ระบบจัดการและแสดงผลเสมือนจริง (Live Preview)
+    // ==========================================
+    function updatePreview() {
+      const docType = document.querySelector('input[name="docType"]:checked').value;
+      const paper = document.getElementById('paper');
+      
+      const dept = document.getElementById('f_dept').value;
+      const no = document.getElementById('f_no').value;
+      const date = document.getElementById('f_date').value;
+      const subject = document.getElementById('f_subject').value;
+      const to = document.getElementById('f_to').value;
+      const ref = document.getElementById('f_ref').value;
+      const attach = document.getElementById('f_attach').value;
+      const content = document.getElementById('f_content').value;
+      const signName = document.getElementById('f_sign_name').value;
+      const signPos = document.getElementById('f_sign_pos').value;
+
+      // จัดการตัวขึ้นต้นย่อหน้า (Tab 2.5 cm และกระจายแบบหนังสือราชการไทย)
+      const formattedContent = content.split('\n').map(p => {
+        if(p.trim() === '') return '<br>';
+        return `<p style="text-indent: 2.5cm; text-align: justify; text-justify: inter-character; margin-bottom: 8pt;">${p.trim()}</p>`;
+      }).join('');
+
+      let html = '';
+
+      if (docType === 'memo') {
+        // --- 1. รูปแบบ บันทึกข้อความภายใน ---
+        html = `
+          <div style="display: flex; align-items: start; gap: 15px; margin-bottom: 5px;">
+            <img src="garuda.png" style="width: 1.5cm;" alt="ครุฑ">
+            <h1 style="font-size: 29pt; font-weight: bold; margin-top: 10px; font-family: 'Sarabun';">บันทึกข้อความ</h1>
+          </div>
+          <div style="font-size: 16pt; line-height: 1.8;">
+            <p><b>ส่วนราชการ</b><span style="padding-left: 10px;">${dept}</span></p>
+            <div style="display: flex;">
+              <div style="flex: 1;"><b>ที่</b><span style="padding-left: 10px;">${no}</span></div>
+              <div style="flex: 1;"><b>วันที่</b><span style="padding-left: 10px;">${date}</span></div>
+            </div>
+            <p><b>เรื่อง</b><span style="padding-left: 10px;">${subject}</span></p>
+          </div>
+          <hr style="border-top: 2px solid black; margin-top: 5px; margin-bottom: 15px;">
+          <div style="font-size: 16pt; margin-bottom: 20px;">
+            <b>เรียน</b><span style="padding-left: 10px;">${to}</span>
+          </div>
+          <div style="font-size: 16pt; min-height: 350px; line-height: 1.7;">
+            ${formattedContent}
+          </div>
+          <div style="margin-top: 40px; text-align: center; width: 50%; margin-left: auto; font-size: 16pt;">
+            <p style="margin-bottom: 35px;">(ลงชื่อ)</p>
+            <p>${signName}</p>
+            <p>${signPos}</p>
+          </div>
+        `;
+      } else if (docType === 'official') {
+        // --- 2. รูปแบบ หนังสือภายนอก (ตราครุฑกลางกระดาษ) ---
+        html = `
+          <div style="text-align: center; margin-bottom: 15px;">
+            <img src="garuda.png" style="width: 3cm; margin: 0 auto;" alt="ครุฑ">
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 16pt; margin-bottom: 10px;">
+            <div style="width: 50%;"><b>ที่</b> ${no}</div>
+            <div style="width: 50%; text-align: right; padding-right: 10mm;">${dept}</div>
+          </div>
+          <div style="text-align: center; font-size: 16pt; margin-bottom: 20px; margin-left: 30%;">
+            ${date}
+          </div>
+          <div style="font-size: 16pt; margin-bottom: 6px;"><b>เรื่อง</b> <span style="padding-left: 10px;">${subject}</span></div>
+          <div style="font-size: 16pt; margin-bottom: 6px;"><b>เรียน</b> <span style="padding-left: 10px;">${to}</span></div>
+          ${ref ? `<div style="font-size: 16pt; margin-bottom: 6px;"><b>อ้างถึง</b> <span style="padding-left: 10px;">${ref}</span></div>` : ''}
+          ${attach ? `<div style="font-size: 16pt; margin-bottom: 12px;"><b>สิ่งที่ส่งมาด้วย</b> <span style="padding-left: 10px;">${attach}</span></div>` : '<div style="margin-bottom: 12px;"></div>'}
+          
+          <div style="font-size: 16pt; min-height: 300px; line-height: 1.7; margin-top: 15px;">
+            ${formattedContent}
+          </div>
+          
+          <div style="margin-top: 35px; text-align: center; width: 55%; margin-left: auto; font-size: 16pt;">
+            <p style="margin-bottom: 35px;">ขอแสดงความนับถือ</p>
+            <p style="margin-bottom: 35px;">(ลงชื่อ)</p>
+            <p>${signName}</p>
+            <p>${signPos}</p>
+          </div>
+        `;
+      } else if (docType === 'order') {
+        // --- 3. รูปแบบ หนังสือคำสั่งหน่วยงานคณะทำงาน ---
+        html = `
+          <div style="text-align: center; margin-bottom: 20px;">
+            <img src="garuda.png" style="width: 3cm; margin: 0 auto;" alt="ครุฑ">
+          </div>
+          <div style="text-align: center; font-size: 18pt; font-weight: bold; margin-bottom: 5px;">
+            คำสั่ง${dept}
+          </div>
+          <div style="text-align: center; font-size: 16pt; font-weight: bold; margin-bottom: 10px;">
+            ที่ ${no}
+          </div>
+          <div style="text-align: center; font-size: 16pt; font-weight: bold; margin-bottom: 25px;">
+            เรื่อง ${subject}
+          </div>
+          
+          <div style="font-size: 16pt; min-height: 320px; line-height: 1.7;">
+            ${formattedContent}
+          </div>
+          
+          <div style="margin-top: 30px; text-align: left; font-size: 16pt; text-indent: 2.5cm;">
+            สั่ง ณ วันที่ ${date}
+          </div>
+          
+          <div style="margin-top: 35px; text-align: center; width: 55%; margin-left: auto; font-size: 16pt;">
+            <p style="margin-bottom: 40px;">(ลงชื่อ)</p>
+            <p>${signName}</p>
+            <p>${signPos}</p>
+          </div>
+        `;
+      }
+
+      paper.innerHTML = html;
+    }
+
+    // ==========================================
+    // 4. ระบบบันทึกข้อมูลและส่งออกไฟล์ (Local Save & MS Word)
+    // ==========================================
+    function saveDraft() {
+      const draftData = {
+        docType: document.querySelector('input[name="docType"]:checked').value,
+        docPurpose: document.getElementById('docPurpose').value,
+        dept: document.getElementById('f_dept').value,
+        no: document.getElementById('f_no').value,
+        date: document.getElementById('f_date').value,
+        subject: document.getElementById('f_subject').value,
+        to: document.getElementById('f_to').value,
+        ref: document.getElementById('f_ref').value,
+        attach: document.getElementById('f_attach').value,
+        content: document.getElementById('f_content').value,
+        sign_name: document.getElementById('f_sign_name').value,
+        sign_pos: document.getElementById('f_sign_pos').value,
+      };
+      
+      localStorage.setItem('local_sarabun_draft', JSON.stringify(draftData));
+      Swal.fire({ icon: 'success', title: 'บันทึกข้อมูลลงบราวเซอร์เรียบร้อย!', showConfirmButton: false, timer: 1200 });
+    }
+
+    function loadDraft() {
+      const dataStr = localStorage.getItem('local_sarabun_draft');
+      if(!dataStr) return Swal.fire('ไม่พบข้อมูล', 'ไม่มีไฟล์แบบร่างเดิมที่บันทึกไว้ในเครื่องคอมพิวเตอร์นี้ครับ', 'info');
+      
+      const draft = JSON.parse(dataStr);
+      
+      // เลือกประเภท Radio คืนค่าเดิม
+      document.querySelectorAll('input[name="docType"]').forEach(r => {
+        if(r.value === draft.docType) r.checked = true;
+      });
+      
+      document.getElementById('docPurpose').value = draft.docPurpose || '';
+      document.getElementById('f_dept').value = draft.dept || '';
+      document.getElementById('f_no').value = draft.no || '';
+      document.getElementById('f_date').value = draft.date || '';
+      document.getElementById('f_subject').value = draft.subject || '';
+      document.getElementById('f_to').value = draft.to || '';
+      document.getElementById('f_ref').value = draft.ref || '';
+      document.getElementById('f_attach').value = draft.attach || '';
+      document.getElementById('f_content').value = draft.content || '';
+      document.getElementById('f_sign_name').value = draft.sign_name || '';
+      document.getElementById('f_sign_pos').value = draft.sign_pos || '';
+      
+      updatePreview();
+      Swal.fire({ icon: 'success', title: 'ดึงแบบร่างเดิมสำเร็จ!', showConfirmButton: false, timer: 1200 });
+    }
+
+    function exportWord() {
+      // โครงสร้างมาตรฐานกำหนดค่าหน้ากระดาษและฟอนต์สำหรับใช้งานบน Microsoft Word
+      const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' "+
+           "xmlns:w='urn:schemas-microsoft-com:office:word' "+
+           "xmlns='http://www.w3.org/TR/REC-html40'>"+
+           "<head><meta charset='utf-8'><title>Export Document</title>"+
+           "<style>@page WordSection1 {size: 210mm 297mm; margin: 25mm 20mm 20mm 30mm;} div.WordSection1 {page: WordSection1;} body {font-family: 'TH Sarabun New', 'TH Sarabun PSK', sans-serif; font-size: 16pt;}</style></head><body><div class='WordSection1'>";
+      
+      const footer = "</div></body></html>";
+      
+      const sourceHTML = header + document.getElementById('paper').innerHTML + footer;
+      const source = 'data:application/vnd.ms-word;charset=utf-8,' + encodeURIComponent(sourceHTML);
+      
+      const fileDownload = document.createElement("a");
+      document.body.appendChild(fileDownload);
+      fileDownload.href = source;
+      fileDownload.download = 'หนังสือราชการ_ส่งออกจากระบบAI.doc';
+      fileDownload.click();
+      document.body.removeChild(fileDownload);
+    }
+
+    // กำหนด Event Listener ให้เปลี่ยนพรีวิวทันทีเมื่อมีการกดเลือกวิทยุ (Radio)
+    document.querySelectorAll('input[name="docType"]').forEach(radio => {
+      radio.addEventListener('change', updatePreview);
+    });
+    
+    // โหลดหน้าจอครั้งแรก
+    updatePreview();
+  </script>
+</body>
+</html>
